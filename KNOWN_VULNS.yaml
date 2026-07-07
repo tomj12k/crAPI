@@ -1,0 +1,212 @@
+# KNOWN_VULNS — ground-truth vulnerability catalog
+# Purpose: answer key for benchmarking Scantonomous scan findings against this app.
+# Diff scanner output vs. this file: a hit on a `vulnerable_source` path == true positive;
+# a hit on a `secure_source` path == false positive.
+#
+# Schema per entry:
+#   id               stable slug for this vuln class
+#   category         human-readable vulnerability class
+#   cwe              primary CWE id(s)
+#   owasp            OWASP API Security Top 10 (2023) category
+#   route            HTTP path to reach it (DAST)
+#   parameter        injectable/tainted input(s) (DAST)
+#   vulnerable_source source files that ARE vulnerable (SAST true-positive targets)
+#   secure_source    hardened variant that is NOT vulnerable (false-positive test)
+#   notes            context / caveats
+
+app: crAPI
+full_name: crAPI - Completely Ridiculous API
+upstream: https://github.com/OWASP/crAPI
+fork: https://github.com/tomj12k/crAPI
+language: [Java, Python, Go]
+scan_surface: [SAST-java, SAST-python, SAST-go, DAST-api]
+catalog_notes: >
+  Polyglot microservice app: identity (Java/Spring Boot, /identity/*), workshop
+  (Python/Django, /workshop/api/*), community (Go, /community/api/*), chatbot
+  (Python/Quart, /genai/*). Entries below are grounded in docs/challenges.md and the
+  actual controllers/urls/routes. Routes are the gateway paths a client hits; per-service
+  path prefixes come from each service's URL config. No hardened variants ship, so
+  secure_source is empty. Injection and LLM classes have no dedicated OWASP API 2023
+  category and are tagged with the closest fit as noted per entry. Paths are relative to
+  repo root.
+
+vulns:
+  - id: crapi-bola-vehicle-location
+    category: Broken Object Level Authorization (Challenge 1)
+    cwe: [CWE-639, CWE-285]
+    owasp: API1:2023-BOLA
+    route: GET /identity/api/v2/vehicle/{carId}/location
+    parameter: [carId]
+    vulnerable_source: [services/identity/src/main/java/com/crapi/controller/VehicleController.java]
+    secure_source: []
+    notes: Returns another user's vehicle location by (GUID) vehicle id with no owner check.
+
+  - id: crapi-bola-mechanic-report
+    category: Broken Object Level Authorization (Challenge 2)
+    cwe: [CWE-639, CWE-285]
+    owasp: API1:2023-BOLA
+    route: GET /workshop/api/mechanic/mechanic_report
+    parameter: [report_id]
+    vulnerable_source: [services/workshop/crapi/mechanic/views.py]
+    secure_source: []
+    notes: >
+      GetReportView (hidden endpoint) returns any mechanic report by sequential
+      report_id without ownership enforcement.
+
+  - id: crapi-broken-auth-otp-bruteforce
+    category: Broken Authentication - unlimited OTP on password reset (Challenge 3)
+    cwe: [CWE-307, CWE-287]
+    owasp: API2:2023-Broken Authentication
+    route: POST /identity/api/auth/v3/check-otp
+    parameter: [email, otp, password]
+    vulnerable_source: [services/identity/src/main/java/com/crapi/controller/AuthController.java]
+    secure_source: []
+    notes: >
+      The v3 (and v2) check-otp endpoints allow brute forcing the numeric password-reset
+      OTP; a shadow/older version lacks the throttling of newer ones.
+
+  - id: crapi-excessive-data-exposure-user
+    category: Excessive Data Exposure - user PII in community posts (Challenge 4)
+    cwe: [CWE-213, CWE-200]
+    owasp: API3:2023-Broken Object Property Level Authorization
+    route: GET /community/api/v2/community/posts/recent
+    parameter: []
+    vulnerable_source: [services/community/api/controllers/post_controller.go, services/community/api/models/post.go]
+    secure_source: []
+    notes: >
+      Post responses embed the author object exposing other users' email / internal
+      fields that the client never needs.
+
+  - id: crapi-excessive-data-exposure-video
+    category: Excessive Data Exposure - internal video property (Challenge 5)
+    cwe: [CWE-213, CWE-200]
+    owasp: API3:2023-Broken Object Property Level Authorization
+    route: GET /identity/api/v2/user/videos/{video_id}
+    parameter: [video_id]
+    vulnerable_source: [services/identity/src/main/java/com/crapi/controller/ProfileController.java]
+    secure_source: []
+    notes: Video response leaks an internal conversion property not meant for clients.
+
+  - id: crapi-rate-limiting-contact-mechanic
+    category: Unrestricted Resource Consumption - layer 7 DoS (Challenge 6)
+    cwe: [CWE-770, CWE-400]
+    owasp: API4:2023-Unrestricted Resource Consumption
+    route: POST /workshop/api/merchant/contact_mechanic
+    parameter: [number_of_repeats, repeat_request_if_failed, mechanic_api]
+    vulnerable_source: [services/workshop/crapi/merchant/views.py]
+    secure_source: []
+    notes: >
+      ContactMechanicView loops up to number_of_repeats (<=100) outbound requests per
+      call with no rate limiting, enabling amplified DoS.
+
+  - id: crapi-bfla-delete-video
+    category: Broken Function Level Authorization - admin video delete (Challenge 7)
+    cwe: [CWE-285, CWE-639]
+    owasp: API5:2023-Broken Function Level Authorization
+    route: DELETE /identity/api/v2/admin/videos/{video_id}
+    parameter: [video_id]
+    vulnerable_source: [services/identity/src/main/java/com/crapi/controller/ProfileController.java]
+    secure_source: []
+    notes: >
+      The admin delete-video endpoint is reachable by non-admin users (predictable
+      shadow admin route), letting anyone delete another user's video.
+
+  - id: crapi-mass-assignment-order
+    category: Mass Assignment - free item / balance abuse (Challenges 8 & 9)
+    cwe: [CWE-915]
+    owasp: API3:2023-Broken Object Property Level Authorization
+    route: PUT /workshop/api/shop/orders/{order_id}
+    parameter: [status, quantity]
+    vulnerable_source: [services/workshop/crapi/shop/views.py]
+    secure_source: []
+    notes: >
+      OrderControlView lets a user edit order properties (e.g. status -> returned,
+      quantity) via a shadow endpoint, yielding refunds / balance increase.
+
+  - id: crapi-mass-assignment-video
+    category: Mass Assignment - internal video property (Challenge 10)
+    cwe: [CWE-915]
+    owasp: API3:2023-Broken Object Property Level Authorization
+    route: PUT /identity/api/v2/user/videos/{video_id}
+    parameter: [conversion_params, video_name]
+    vulnerable_source: [services/identity/src/main/java/com/crapi/controller/ProfileController.java]
+    secure_source: []
+    notes: >
+      The update-video endpoint accepts the internal conversion property, which can be
+      changed to chain into command injection.
+
+  - id: crapi-ssrf-contact-mechanic
+    category: Server-Side Request Forgery (Challenge 11)
+    cwe: [CWE-918]
+    owasp: API7:2023-SSRF
+    route: POST /workshop/api/merchant/contact_mechanic
+    parameter: [mechanic_api]
+    vulnerable_source: [services/workshop/crapi/merchant/views.py]
+    secure_source: []
+    notes: >
+      ContactMechanicView issues requests.get(request_data["mechanic_api"], ...) to a
+      fully user-controlled URL, forwarding the caller's Authorization header (SSRF).
+
+  - id: crapi-nosql-injection-coupon
+    category: NoSQL Injection - free coupons (Challenge 12)
+    cwe: [CWE-943]
+    owasp: API8:2019-Injection
+    route: POST /community/api/v2/coupon/validate-coupon
+    parameter: [coupon_code]
+    vulnerable_source: [services/community/api/controllers/coupon_controller.go, services/community/api/models/coupon.go]
+    secure_source: []
+    notes: >
+      ValidateCoupon builds a Mongo bson query from the JSON body; a NoSQL operator
+      payload validates without a valid code. Injection has no dedicated API 2023 category.
+
+  - id: crapi-sql-injection-coupon
+    category: SQL Injection - redeem claimed coupon (Challenge 13)
+    cwe: [CWE-89]
+    owasp: API8:2019-Injection
+    route: POST /workshop/api/shop/apply_coupon
+    parameter: [coupon_code, amount]
+    vulnerable_source: [services/workshop/crapi/shop/views.py]
+    secure_source: []
+    notes: >
+      ApplyCouponView concatenates coupon_code into a raw cursor.execute() SELECT
+      (shop/views.py ~L388), allowing DB modification. Injection has no dedicated API
+      2023 category.
+
+  - id: crapi-unauthenticated-access
+    category: Unauthenticated Access to sensitive endpoint (Challenge 14)
+    cwe: [CWE-306, CWE-287]
+    owasp: API2:2023-Broken Authentication
+    route: POST /identity/api/auth/v2.7/user/login-with-token
+    parameter: []
+    vulnerable_source: [services/identity/src/main/java/com/crapi/controller/AuthController.java]
+    secure_source: []
+    notes: >
+      A predictable shadow endpoint performs no proper authentication check.
+      Approximate: challenge only asks to find "an endpoint that does not perform auth";
+      the login-with-token variants in AuthController are the documented weak-auth path.
+
+  - id: crapi-jwt-forge
+    category: JWT Vulnerabilities - forge valid token (Challenge 15)
+    cwe: [CWE-347]
+    owasp: API2:2023-Broken Authentication
+    route: GET /identity/api/auth/jwks.json
+    parameter: [Authorization]
+    vulnerable_source: [services/identity/src/main/java/com/crapi/config/JwtProvider.java, services/identity/src/main/java/com/crapi/config/JwtAuthTokenFilter.java]
+    secure_source: []
+    notes: >
+      JWT validation is vulnerable to forging (e.g. alg confusion / jku via the exposed
+      jwks.json, or weak key), granting full account takeover.
+
+  - id: crapi-llm-prompt-injection
+    category: LLM Prompt Injection / Insecure Chatbot (Challenges 16-18)
+    cwe: [CWE-77]
+    owasp: API10:2023-Unsafe Consumption of APIs
+    route: POST /genai/ask
+    parameter: [message]
+    vulnerable_source: [services/chatbot/src/chatbot/chat_api.py, services/chatbot/src/chatbot/chat_service.py]
+    secure_source: []
+    notes: >
+      The chatbot passes user input to an LLM without guardrails, enabling prompt
+      injection (client-side render injection, credential extraction, actions on behalf
+      of others). Approximate owasp: prompt injection is covered by the OWASP Top 10 for
+      LLMs, not the API Top 10; API10 (unsafe consumption of the LLM API) is the nearest fit.
